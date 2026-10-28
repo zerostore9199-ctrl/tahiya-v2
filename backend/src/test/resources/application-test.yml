@@ -1,0 +1,21 @@
+spring:
+  datasource:
+    url: ${TEST_DB_URL:jdbc:postgresql://localhost:5432/attendance_test}
+    username: ${TEST_DB_USER:postgres}
+    password: ${TEST_DB_PASSWORD:postgres}
+
+app:
+  cors-origins: http://localhost:4200
+  security:
+    jwt-secret: test-jwt-secret-that-is-long-enough-0123456789
+    refresh-cookie-secure: false
+    max-failed-logins: 3
+    lockout-minutes: 15
+    ip-login-attempts-per-minute: 1000
+  biometric:
+    encryption-key: MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
+  face-service:
+    url: http://localhost:65000
+    api-key: test-face-api-key-123456
+  demo:
+    enabled: false

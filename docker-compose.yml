@@ -1,0 +1,99 @@
+# تاهييه — النظام العسكري الذكي لإدارة الحضور والانضباط — full stack on one internal server.
+# Usage:  cp .env.example .env  (fill in secrets)  &&  docker compose up -d --build
+name: mtc-attendance
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: attendance
+      POSTGRES_USER: attendance
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}
+    # Sized for several backend replicas (each pool defaults to 40 connections) and ~5000 users.
+    command: >
+      postgres
+      -c max_connections=${DB_MAX_CONNECTIONS:-300}
+      -c shared_buffers=${DB_SHARED_BUFFERS:-512MB}
+      -c effective_cache_size=${DB_EFFECTIVE_CACHE:-1536MB}
+      -c work_mem=8MB
+      -c synchronous_commit=on
+    shm_size: 512mb
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U attendance -d attendance"]
+      interval: 10s
+      retries: 10
+    networks: [internal]
+
+  face-service:
+    build:
+      context: ./face-service
+      args:
+        FACE_MODEL_PACK: ${FACE_MODEL_PACK:-buffalo_l}
+    restart: unless-stopped
+    environment:
+      FACE_API_KEY: ${FACE_API_KEY:?set FACE_API_KEY in .env}
+      FACE_DET_SIZE: ${FACE_DET_SIZE:-640}
+      FACE_MAX_CONCURRENCY: ${FACE_MAX_CONCURRENCY:-2}
+      FACE_WORKERS: ${FACE_WORKERS:-1}
+    networks: [internal]
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    # The backend is stateless (JWT + DB-stored refresh tokens), so it scales horizontally.
+    # Nginx round-robins across all replicas. Use BACKEND_REPLICAS=1 on a small laptop.
+    deploy:
+      replicas: ${BACKEND_REPLICAS:-2}
+    depends_on:
+      db: { condition: service_healthy }
+      face-service: { condition: service_started }
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+      DB_URL: jdbc:postgresql://db:5432/attendance
+      DB_USER: attendance
+      DB_PASSWORD: ${DB_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
+      BIOMETRIC_ENC_KEY: ${BIOMETRIC_ENC_KEY:?set BIOMETRIC_ENC_KEY in .env}
+      FACE_SERVICE_URL: http://face-service:8000
+      FACE_API_KEY: ${FACE_API_KEY}
+      CORS_ORIGINS: ${PUBLIC_ORIGIN:-https://localhost:8443}
+      REFRESH_COOKIE_SECURE: "true"
+      DEMO_DATA_ENABLED: ${DEMO_DATA_ENABLED:-false}
+      DEMO_PASSWORD: ${DEMO_PASSWORD:-}
+      BOOTSTRAP_ADMIN_USERNAME: ${BOOTSTRAP_ADMIN_USERNAME:-admin}
+      BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-}
+      # A whole unit often sits behind one NAT address, so the per-IP login budget must be generous;
+      # the per-account lockout (5 failed attempts) is the real brute-force protection.
+      IP_LOGIN_ATTEMPTS_PER_MINUTE: ${IP_LOGIN_ATTEMPTS_PER_MINUTE:-600}
+      DB_POOL_SIZE: ${DB_POOL_SIZE:-40}
+      TOMCAT_MAX_THREADS: ${TOMCAT_MAX_THREADS:-400}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:8080/actuator/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    networks: [internal]
+
+  web:
+    build: ./frontend
+    restart: unless-stopped
+    depends_on:
+      backend: { condition: service_healthy }
+    environment:
+      HTTPS_PUBLIC_PORT: ${HTTPS_PORT:-8443}
+    ports:
+      - "${HTTP_PORT:-8080}:8080"
+      - "${HTTPS_PORT:-8443}:8443"
+    volumes:
+      - ./certs:/etc/nginx/certs
+    networks: [internal]
+
+volumes:
+  db-data:
+
+networks:
+  internal:

@@ -1,0 +1,11 @@
+.env
+certs/
+backend/target/
+frontend/node_modules/
+frontend/dist/
+frontend/.angular/
+face-service/.venv/
+__pycache__/
+*.pyc
+.idea/
+.vscode/
